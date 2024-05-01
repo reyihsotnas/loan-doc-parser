@@ -23,107 +23,149 @@ public class HdfcLoanAmortisationDocParser {
         System.setProperty("log4j.configurationFile", log4jXMLPath);
     }
 
+
     public static void main(String[] args) {
         HdfcLoanAmortisationDocParser parser = new HdfcLoanAmortisationDocParser();
-        File outputFile = new File("output.csv");
-        if(outputFile.exists()) {
-            outputFile.delete();
-        }
-        parser.initParsing(outputFile);
-
+        parser.parseAmortisationSchedule();
     }
 
-    public void initParsing(final File outputFile) {
+    public void parseAmortisationSchedule() {
         final File amortisationScheduleFile = new File(HdfcLoanAmortisationDocParser.class.getClassLoader().getResource(AMORTISATION_FILE_NAME).getPath());
+        final File outputFile = new File("output.csv");
+        if(outputFile.exists()) {
+            logger.info("Output file exists at :{}. Deleting it.",outputFile.getPath());
+            outputFile.delete();
+        }
+        logger.info("Parsing input PDF:{}, to generate CSV:{}",amortisationScheduleFile.getPath(), outputFile.getPath());
         parseAmortisationSchedule(amortisationScheduleFile, outputFile);
     }
 
     private void parseAmortisationSchedule(final File amortisationSchedule, final File outputFile) {
-        Map<String, List<String>> parsedContent = new HashMap<>();
+
+        final List<PageSummary> parsedContent = new LinkedList<>();
         final List<String> headerRecords = getHeaders();
         try (PDDocument doc = Loader.loadPDF(amortisationSchedule)) {
 
             logger.info("No. Pages: {}", doc.getPages().getCount());
-            //int maxPages = doc.getPages().getCount();
-            int maxPages = 1;
-            for (int pageNo = 1; pageNo<=maxPages; pageNo++){
-                PDPage page = doc.getPage(1);
+            int initialPage=0;
+            //int maxPages = 5;
+            final int maxPages = doc.getPages().getCount();
+            for (int pageNo = initialPage; pageNo<maxPages; pageNo++){
+                logger.info(" --- processing page: {}", pageNo);
+                PDPage page = doc.getPage(pageNo);
                 PDFTextStripper stripper = new PDFTextStripper();
                 stripper.setStartPage(pageNo);
                 stripper.setEndPage(pageNo);
 
                 String text = stripper.getText(doc);
 
-                prettyPrintResults(parsePage(text, headerRecords, pageNo), headerRecords, outputFile, pageNo==1);
+                parsedContent.add(parsePage(text, headerRecords, pageNo));
+                //prettyPrintResults(parsePage(text, headerRecords, pageNo), headerRecords, outputFile, pageNo==1);
             }
-
+        prettyPrintResults(parsedContent,headerRecords,outputFile);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
-    private Map<String, List<String>> parsePage(final String pageContents, final List<String> headerRecords, final int pageNo) {
+    private PageSummary parsePage(final String pageContents, final List<String> passedHeaderRecords, final int pageNo) {
         final String pageStart = "Page " + pageNo + " of ";
-        final Map<String, List<String>> parsedPageValues = new HashMap<>();
-        final Map<String, List<String>> lastHeaderParsed = new HashMap<>();
+        final PageSummary pageSummary = null;
+        final Map<String, List<AmortisationValueHolder>> parsedPageValues = new LinkedHashMap<>();
+        //final Map<String, List<String>> lastHeaderParsed = new HashMap<>();
         final List<String> pageContent = List.of(pageContents.split("\n"));
         List<String> tempCollection = new ArrayList<>();
+        final List<String> headerRecords = new ArrayList<>(passedHeaderRecords);
         final String finalHeaderRecord = headerRecords.get(headerRecords.size()-1);
         boolean pageStartEncountered = false;
         boolean finalHeaderFound = false;
-        String lastHeaderEvaluated="";
-        String lastDerivedHeader="";
-
+        List<AmortisationValueHolder> backupTempValue = new LinkedList<>();
+        int maxRecords = 0;
         for (String value : pageContent) {
             final String lineValue = value.trim();
-            logger.info(" ---- lineContent: {}, pageStartEncontered: {}", lineValue, pageStartEncountered);
+            logger.info(" --- --- lineContent: {}, pageStartEncontered: {}", lineValue, pageStartEncountered);
             if (!lineValue.contains(pageStart) && !pageStartEncountered) {
-                logger.info(" ---- --- looping until page start :{} is encountered..", pageStart);
+                logger.info(" --- --- --- looping until page start :{} is encountered..", pageStart);
                 continue;
             }
             if (lineValue.contains(pageStart) && !pageStartEncountered) {
-                logger.info(" ---- --- Setting pageStartEncountered = true");
+                logger.info(" --- --- Setting pageStartEncountered = true");
                 pageStartEncountered = true;
                 continue;
             }
 
             boolean headerFound = false;
+            boolean partialHeaderFound = false;
+            List<AmortisationValueHolder> lastTempValue = null;
+
 
             for (String header : headerRecords) {
-                if(header.equals(lineValue)){
+                boolean valueDerived=false;
+                // atleast partial header value is present in the current line
+               if (header.contains(lineValue)) {
+                   logger.info(" --- --- --- Header found. creating VO with values :{} , header:{} to evaluatedHeader: {}, count: {}", tempCollection, header, lineValue, tempCollection.size());
+                   lastTempValue=AmortisationValueHolder.parsedValues(header,lineValue,tempCollection);
+                   maxRecords = maxRecords<tempCollection.size()? tempCollection.size() : maxRecords;
+                   // Exact header is found. Add to the list.
+                   if(header.equals(lineValue)) {
+                       headerFound = true;
+                       logger.info(" --- --- --- --- Exact Header found: {}. Adding elements:{} of count: {}", header, tempCollection, tempCollection.size());
 
-                } else if (header.contains(lineValue)) {
-                    headerFound = true;
-                    lastHeaderEvaluated=header;
-                    lastDerivedHeader=lineValue;
-                    logger.info("---- --- Header found. populating values : {} to header: {}, count: {}", tempCollection, header, tempCollection.size());
-                    logger.info("---- ---- --- lastHeaderEvaluated: {}, lastHeaderLineParsed: {}",lastHeaderEvaluated, lastDerivedHeader);
-                    if(tempCollection.size() > 0){
-                        if(lastHeaderParsed.containsKey(header)){
-                            lastHeaderParsed.get(header).addAll(new ArrayList<>(List.copyOf(tempCollection)));
-                        } else {
-                            lastHeaderParsed.put(header, new ArrayList(List.copyOf(tempCollection)));
-                        }
-                    } else {
-                        lastHeaderParsed.put(header, new ArrayList<String>());
-                    }
+                       if(tempCollection.size() > 0){
 
+                           if(parsedPageValues.containsKey(header)){
+                               logger.info(" --- --- --- --- --- added element: {} for header:{} to the parsed values", lastTempValue,header);
+                               parsedPageValues.get(header).addAll(new LinkedList<>(lastTempValue));
+                           } else {
+                               logger.info(" --- --- --- --- --- created new mapping element: {} for header:{} to the parsed values", lastTempValue,header);
+                               parsedPageValues.put(header, new LinkedList<>(lastTempValue));
+                           }
+                       } else {
+                           logger.info(" --- --- --- --- --- Collection is empty.empty element for header:{} to the parsed values", header);
+                           parsedPageValues.put(header, new LinkedList<>());
+                       }
+                       backupTempValue.clear();
+                       valueDerived = true;
+                       logger.info(" ... ... Cleared out backup temp value ...");
+                       headerRecords.remove(header);
+                   } else {
+                       logger.info(" --- --- --- --- Partial Header found. creating VO with values :{} , header:{} to evaluatedHeader: {}, count: {}", tempCollection, header, lineValue, tempCollection.size());
+                       headerFound = true;
+                       if (backupTempValue != null && backupTempValue.size()>0) {
+                           final String newHeaderValue=backupTempValue.get(0).getEvaluatedHeader()+" " +lineValue;
+                            logger.info(" --- --- --- --- --- new header derived: {} , current header: {}", newHeaderValue, header);
+                           if(header.equals(newHeaderValue)) {
+                               if(parsedPageValues.containsKey(header)){
+                                   logger.info(" --- --- --- --- --- added element: {} for header:{} to the parsed values", backupTempValue,header);
+                                   parsedPageValues.get(header).addAll(new LinkedList<>(backupTempValue));
+                               } else {
+                                   logger.info(" --- --- --- --- --- created new mapping element: {} for header:{} to the parsed values", backupTempValue,header);
+                                   parsedPageValues.put(header, new LinkedList(backupTempValue));
+                               }
+                               valueDerived=true;
+                               backupTempValue.clear();
+                               logger.info(" ... ... Cleared out backup temp value ...");
+                               headerRecords.remove(header);
+                           }
+                       } else {
+                           logger.info("This is first instance of the backup. LastTempValue backed up to backupTempValue ...");
+                           backupTempValue.addAll(lastTempValue);
+                       }
+                   }
                     tempCollection.clear();
                     if(finalHeaderRecord.contains(header)) {
                         logger.info("Final Header: {} encountered. Breaking loop..", finalHeaderRecord);
                         finalHeaderFound = true;
                         break;
                     }
-                    if(headerFound) {
-                        logger.info("---- --- --- since a header was found in the last loop, existing ...");
+                    if (valueDerived) {
+                        logger.info(" --- --- Exiting the loop for checking for Headers.");
                         break;
                     }
-                    String completedHeader=lastDerivedHeader+lineValue;
-                    logger.info("---- --- --- --- Complete Header Evaluated: {}", completedHeader);
-                    //if(completedHeader.)
-
                 }
             }
+
+
             if(finalHeaderFound) {
                 break;
             }
@@ -131,12 +173,11 @@ public class HdfcLoanAmortisationDocParser {
                 logger.info(" ---- ---- --- Adding {} to temp header", lineValue);
                 tempCollection.add(lineValue);
             }
-
         }
-        return parsedPageValues;
+        return new PageSummary(pageNo,maxRecords,parsedPageValues);
     }
 
-    private void prettyPrintResults(final Map<String, List<String>> resultRecords, final List<String> headerRecords, final File outputFile, boolean printHeaderRow) throws IOException {
+    private void prettyPrintResults(final List<PageSummary> pageSummary, final List<String> headerRecords, final File outputFile) throws IOException {
         logger.info("---------------------------------------------------");
         System.out.println();
         try(Writer fileWriter = new BufferedWriter(new FileWriter(outputFile,true))) {
@@ -145,26 +186,29 @@ public class HdfcLoanAmortisationDocParser {
             headerStr=headerStr.replace("[","");
             headerStr=headerStr.replace("]","");
             System.out.println(headerStr);
-            if (printHeaderRow) {
+
                 fileWriter.append(headerStr);
-            }
+
             fileWriter.append(System.lineSeparator());
-            final List<String> tranTypeRecords = resultRecords.get(headerRecords.get(0));
-            if (tranTypeRecords != null && tranTypeRecords.size() > 0) {
-                for (int i = 0; i < tranTypeRecords.size(); i++) {
-                    for (String header : headerRecords) {
-                        List<String> recordValues = resultRecords.get(header);
-                        if (recordValues == null || recordValues.size() <= i) {
-                            System.out.print(",");
-                            fileWriter.append(",");
-                        } else {
-                            String value = recordValues.get(i);
-                            System.out.print(value + ",");
-                            fileWriter.append(value + ",");
-                        }
+            if (pageSummary != null && pageSummary.size() > 0) {
+
+                for (final PageSummary page : pageSummary) {
+                    for (int i = 0; i < page.getMaxRecordCount(); i++) {
+                        final Map<String, List<AmortisationValueHolder>> pageRecords =  page.getPageSummary();
+                            for (String header : headerRecords) {
+                                List<AmortisationValueHolder> recordValues = pageRecords.get(header);
+                                if (recordValues == null || recordValues.size() <= i) {
+                                    System.out.print(",");
+                                    fileWriter.append(",");
+                                } else {
+                                    AmortisationValueHolder value = recordValues.get(i);
+                                    System.out.print(value.getValue() + ",");
+                                    fileWriter.append(value.getValue() + ",");
+                                }
+                            }
+                            System.out.println();
+                            fileWriter.append(System.lineSeparator());
                     }
-                    System.out.println();
-                    fileWriter.append(System.lineSeparator());
                 }
             }
         }
@@ -184,6 +228,6 @@ public class HdfcLoanAmortisationDocParser {
             throw new RuntimeException(e);
         }
 
-return headerList;
+        return headerList;
     }
 }
