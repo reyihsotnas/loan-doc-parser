@@ -14,7 +14,7 @@ public class HdfcLoanAmortisationDocParser {
 
     private static final String HEADER_FILE = "headers.txt";
 
-    private static final String AMORTISATION_FILE_NAME = "AMRT_DETAILS_694456.PDF";
+    private static final String AMORTISATION_FILE_NAME = "AMRT_DETAILS_386657.PDF";
 
     private static final Logger logger = LogManager.getLogger(HdfcLoanAmortisationDocParser.class);
 
@@ -50,14 +50,23 @@ public class HdfcLoanAmortisationDocParser {
             int initialPage=0;
             //int maxPages = 5;
             final int maxPages = doc.getPages().getCount();
-            for (int pageNo = initialPage; pageNo<maxPages; pageNo++){
+            int pageNo=0;
+            for(PDPage page : doc.getPages()){
+          //  for (int pageNo = initialPage; pageNo<=maxPages; pageNo++){
+                pageNo +=1;// page.
                 logger.info(" --- processing page: {}", pageNo);
-                PDPage page = doc.getPage(pageNo);
+                //PDPage page = doc.getPage(pageNo);
                 PDFTextStripper stripper = new PDFTextStripper();
                 stripper.setStartPage(pageNo);
                 stripper.setEndPage(pageNo);
 
                 String text = stripper.getText(doc);
+
+                if(text == null || "".equals(text)) {
+                    logger.warn("Empty value retrieved from page: {}. looping to next.", pageNo);
+                    continue;
+                }
+
 
                 parsedContent.add(parsePage(text, headerRecords, pageNo));
                 //prettyPrintResults(parsePage(text, headerRecords, pageNo), headerRecords, outputFile, pageNo==1);
@@ -69,7 +78,8 @@ public class HdfcLoanAmortisationDocParser {
     }
 
     private PageSummary parsePage(final String pageContents, final List<String> passedHeaderRecords, final int pageNo) {
-        final String pageStart = "Page " + pageNo + " of ";
+//        final String pageStart = "Loan Account Number :";
+        final String pageStart = "Page " + (pageNo) + " of ";
         final PageSummary pageSummary = null;
         final Map<String, List<AmortisationValueHolder>> parsedPageValues = new LinkedHashMap<>();
         //final Map<String, List<String>> lastHeaderParsed = new HashMap<>();
